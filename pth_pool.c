@@ -10,109 +10,114 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h> 
+#include <pthread.h>
 #include <unistd.h>
-#include <semaphore.h>
 #include <time.h>
 
-#define THREAD_NUM 4    // Tamanho do pool de threads
-#define BUFFER_SIZE 256 // Númermo máximo de tarefas enfileiradas
+#define THREAD_NUM 3   
+#define BUFFER_SIZE 10  
 
-typedef struct Task{
-   int a, b;
-}Task;
+typedef struct {
+    int clock[THREAD_NUM];
+} VectorClock;
 
-Task taskQueue[BUFFER_SIZE];
-int taskCount = 0;
-
+VectorClock buffer[BUFFER_SIZE];
+int buffer_count = 0;
 pthread_mutex_t mutex;
+pthread_cond_t can_produce, can_consume;
 
-pthread_cond_t condFull;
-pthread_cond_t condEmpty;
-
-void executeTask(Task* task, int id){
-   int result = task->a + task->b;
-   printf("(Thread %d) Sum of %d and %d is %d\n", id, task->a, task->b, result);
+void print_vector_clock(VectorClock *vc) {
+    printf("[");
+    for (int i = 0; i < THREAD_NUM; i++) {
+        printf("%d", vc->clock[i]);
+        if (i < THREAD_NUM - 1) printf(", ");
+    }
+    printf("]\n");
 }
 
-Task getTask(){
-   pthread_mutex_lock(&mutex);
-   
-   while (taskCount == 0){
-      pthread_cond_wait(&condEmpty, &mutex);
-   }
-   
-   Task task = taskQueue[0];
-   int i;
-   for (i = 0; i < taskCount - 1; i++){
-      taskQueue[i] = taskQueue[i+1];
-   }
-   taskCount--;
-   
-   pthread_mutex_unlock(&mutex);
-   pthread_cond_signal(&condFull);
-   return task;
+//Produtor
+void *producer(void *arg) {
+    int id = *(int*)arg;
+    VectorClock vc;
+    
+    while (1) {
+        //Fila cheia
+        sleep(1); 
+        
+        //Fila vazia
+        //sleep(2); 
+        
+        for (int i = 0; i < THREAD_NUM; i++) {
+            vc.clock[i] = 0;
+        }
+        vc.clock[id]++;
+        
+        pthread_mutex_lock(&mutex);
+        while (buffer_count == BUFFER_SIZE) {
+            pthread_cond_wait(&can_produce, &mutex);
+        }
+        
+        buffer[buffer_count++] = vc;
+        printf("Produtor %d produziu: ", id);
+        print_vector_clock(&vc);
+        
+        pthread_cond_signal(&can_consume);
+        pthread_mutex_unlock(&mutex);
+    }
+    return NULL;
 }
 
-void submitTask(Task task){
-   pthread_mutex_lock(&mutex);
 
-   while (taskCount == BUFFER_SIZE){
-      pthread_cond_wait(&condFull, &mutex);
-   }
-
-   taskQueue[taskCount] = task;
-   taskCount++;
-
-   pthread_mutex_unlock(&mutex);
-   pthread_cond_signal(&condEmpty);
+//Consumidor
+void *consumer(void *arg) {
+    int id = *(int*)arg;
+    VectorClock vc;
+    
+    while (1) {
+        pthread_mutex_lock(&mutex);
+        while (buffer_count == 0) {
+            pthread_cond_wait(&can_consume, &mutex);
+        }
+        
+        vc = buffer[--buffer_count];
+        printf("Consumidor %d consumiu: ", id);
+        print_vector_clock(&vc);
+        
+        pthread_cond_signal(&can_produce);
+        pthread_mutex_unlock(&mutex);
+        
+        //Fila cheia
+        sleep(2);
+        
+        //Fila vazia
+        //sleep(1);
+    }
+    return NULL;
 }
 
-void *startThread(void* args);  
 
-/*--------------------------------------------------------------------*/
-int main(int argc, char* argv[]) {
-   pthread_mutex_init(&mutex, NULL);
+int main() {
+    pthread_t producers[THREAD_NUM], consumers[THREAD_NUM];
+    int producer_ids[THREAD_NUM], consumer_ids[THREAD_NUM];
+    
+    pthread_mutex_init(&mutex, NULL);
+    pthread_cond_init(&can_produce, NULL);
+    pthread_cond_init(&can_consume, NULL);
+    
+    for (int i = 0; i < THREAD_NUM; i++) {
+        producer_ids[i] = i;
+        consumer_ids[i] = i;
+        pthread_create(&producers[i], NULL, producer, &producer_ids[i]);
+        pthread_create(&consumers[i], NULL, consumer, &consumer_ids[i]);
+    }
+    
    
-   pthread_cond_init(&condEmpty, NULL);
-   pthread_cond_init(&condFull, NULL);
-
-   pthread_t thread[THREAD_NUM]; 
-   long i;
-   for (i = 0; i < THREAD_NUM; i++){  
-      if (pthread_create(&thread[i], NULL, &startThread, (void*) i) != 0) {
-         perror("Failed to create the thread");
-      }  
-   }
+    sleep(30);
+    
    
-   srand(time(NULL));
-   for (i = 0; i < 500; i++){
-      Task t = {
-         .a = rand() % 100,
-         .b = rand() % 100
-      };
-      submitTask(t);
-   }
-   
-   for (i = 0; i < THREAD_NUM; i++){  
-      if (pthread_join(thread[i], NULL) != 0) {
-         perror("Failed to join the thread");
-      }  
-   }
-   
-   pthread_mutex_destroy(&mutex);
-   pthread_cond_destroy(&condEmpty);
-   pthread_cond_destroy(&condFull);
-   return 0;
-}  /* main */
-
-/*-------------------------------------------------------------------*/
-void *startThread(void* args) {
-   long id = (long) args; 
-   while (1){ 
-      Task task = getTask();
-      executeTask(&task, id);
-      sleep(rand()%5);
-   }
-   return NULL;
-} 
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&can_produce);
+    pthread_cond_destroy(&can_consume);
+    
+    return 0;
+}
