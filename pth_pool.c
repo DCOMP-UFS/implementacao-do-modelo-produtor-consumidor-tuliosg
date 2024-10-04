@@ -35,66 +35,76 @@ void print_vector_clock(VectorClock *vc) {
     printf("]\n");
 }
 
-//Produtor
+
+VectorClock produce_clock(int id) {
+    VectorClock vc;
+    for (int i = 0; i < THREAD_NUM; i++) {
+        vc.clock[i] = 0;
+    }
+    vc.clock[id]++;
+    return vc;
+}
+
+
+void add_to_buffer(VectorClock vc, int id) {
+    pthread_mutex_lock(&mutex);
+    while (buffer_count == BUFFER_SIZE) {
+        printf("\nFila cheia\n");
+        pthread_cond_wait(&can_produce, &mutex);
+    }
+    
+    buffer[buffer_count++] = vc;
+    printf("Produtor %d produziu: ", id);
+    print_vector_clock(&vc);
+    
+    pthread_cond_signal(&can_consume);
+    pthread_mutex_unlock(&mutex);
+}
+
+
+VectorClock remove_from_buffer(int id) {
+    VectorClock vc;
+    pthread_mutex_lock(&mutex);
+    while (buffer_count == 0) {
+        printf("\nFila vazia\n");
+        pthread_cond_wait(&can_consume, &mutex);
+    }
+    
+    vc = buffer[--buffer_count];
+    printf("Consumidor %d consumiu: ", id);
+    print_vector_clock(&vc);
+    
+    pthread_cond_signal(&can_produce);
+    pthread_mutex_unlock(&mutex);
+    return vc;
+}
+
+// Produtor
 void *producer(void *arg) {
     int id = *(int*)arg;
-    VectorClock vc;
-    
     while (1) {
-        //Fila cheia
-        sleep(1); 
         
-        //Fila vazia
-        //sleep(2); 
+        sleep(1); // Fila cheia
+        // sleep(2); // Fila vazia
         
-        for (int i = 0; i < THREAD_NUM; i++) {
-            vc.clock[i] = 0;
-        }
-        vc.clock[id]++;
-        
-        pthread_mutex_lock(&mutex);
-        while (buffer_count == BUFFER_SIZE) {
-            pthread_cond_wait(&can_produce, &mutex);
-        }
-        
-        buffer[buffer_count++] = vc;
-        printf("Produtor %d produziu: ", id);
-        print_vector_clock(&vc);
-        
-        pthread_cond_signal(&can_consume);
-        pthread_mutex_unlock(&mutex);
+        VectorClock vc = produce_clock(id);
+        add_to_buffer(vc, id);
     }
     return NULL;
 }
 
-
-//Consumidor
+// Consumidor
 void *consumer(void *arg) {
     int id = *(int*)arg;
-    VectorClock vc;
-    
     while (1) {
-        pthread_mutex_lock(&mutex);
-        while (buffer_count == 0) {
-            pthread_cond_wait(&can_consume, &mutex);
-        }
         
-        vc = buffer[--buffer_count];
-        printf("Consumidor %d consumiu: ", id);
-        print_vector_clock(&vc);
+        remove_from_buffer(id);
         
-        pthread_cond_signal(&can_produce);
-        pthread_mutex_unlock(&mutex);
-        
-        //Fila cheia
-        sleep(2);
-        
-        //Fila vazia
-        //sleep(1);
+        sleep(2); // Fila cheia
+        // sleep(1); // Fila vazia
     }
     return NULL;
 }
-
 
 int main() {
     pthread_t producers[THREAD_NUM], consumers[THREAD_NUM];
@@ -111,10 +121,8 @@ int main() {
         pthread_create(&consumers[i], NULL, consumer, &consumer_ids[i]);
     }
     
-   
     sleep(30);
     
-   
     pthread_mutex_destroy(&mutex);
     pthread_cond_destroy(&can_produce);
     pthread_cond_destroy(&can_consume);
